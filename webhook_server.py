@@ -461,8 +461,6 @@ def webhook():
         raw_data = str(raw_data).strip()
 
         print("RAW ALERT:", raw_data)
-
-        ```python id="c8u7re"
         
 if not raw_data.startswith("{"):
 
@@ -471,7 +469,6 @@ if not raw_data.startswith("{"):
     )
 
     return "OK", 200
-
     
         data = json.loads(raw_data)
 
