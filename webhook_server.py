@@ -553,8 +553,8 @@ def webhook():
 
         print("RAW ALERT:", raw_data)
         
-# PLAIN TEXT ALERTS
-if not raw_data.startswith("{"):
+        # PLAIN TEXT ALERTS
+        if not raw_data.startswith("{"):
 
             send_telegram(
                 "📩 ALERT RECEIVED:\n\n" + raw_data
