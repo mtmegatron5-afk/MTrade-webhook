@@ -444,8 +444,11 @@ def weekly_report_scheduler():
 
             if last_weekly_report != current_key:
 
-                send_telegram(
-                    "📈 WEEKLY REPORT
+        send_telegram(
+                "📈 WEEKLY REPORT\\n\\n" +
+                generate_cluster_report()
+        )
+
 
 " +
                     generate_cluster_report()
@@ -474,8 +477,11 @@ def monthly_report_scheduler():
 
             if last_monthly_report != current_key:
 
-                send_telegram(
-                    "📊 MONTHLY REPORT
+                send_telegram( 
+    "📊 MONTHLY REPORT\\n\\n" +
+    generate_cluster_report()
+)
+ 
 
 " +
                     generate_cluster_report()
