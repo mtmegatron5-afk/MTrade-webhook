@@ -556,8 +556,9 @@ def webhook():
         raw_data = str(raw_data).strip()
 
         print("RAW ALERT:", raw_data)
-
-        if not raw_data.startswith("{"):
+        
+# PLAIN TEXT ALERTS
+if not raw_data.startswith("{"):
 
             send_telegram(
                 "📩 ALERT RECEIVED:\n\n" + raw_data
@@ -565,35 +566,41 @@ def webhook():
 
             return "OK", 200
 
+        # JSON ALERTS
         data = json.loads(raw_data)
 
         action = data.get("action")
         event = data.get("event")
 
+        @ ENTRY
         if action == "buy" or action == "sell":
 
             signals.append(data)
 
             create_trade(data)
 
+        # TP1
         elif event == "tp1_hit":
 
             signals.append(data)
 
             handle_tp1(data)
 
+        # TP2
         elif event == "tp2_hit":
 
             signals.append(data)
 
             handle_tp2(data)
 
+        # TP3
         elif event == "tp3_hit":
 
             signals.append(data)
 
             handle_tp3(data)
 
+        # SL
         elif event == "sl_hit":
 
             signals.append(data)
