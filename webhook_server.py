@@ -470,7 +470,7 @@ def monthly_report_scheduler():
 
         if is_last_day and now.hour == 23 and now.minute == 59:
 
-        if last_monthly_report != current_key:
+         if last_monthly_report != current_key:
 
             send_telegram( 
                 "📊 MONTHLY REPORT\\n\\n" +
