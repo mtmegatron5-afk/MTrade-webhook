@@ -58,19 +58,11 @@ def webhook():
 
     try:
 
-        data = request.get_json(force=True)
+        raw_data = request.data.decode("utf-8")
 
-        print("Incoming alert:", data)
+        print("RAW ALERT:", raw_data)
 
-        message = f"""
-📊 NEW SIGNAL
-
-Symbol: {data.get('symbol', 'N/A')}
-Action: {data.get('action', 'N/A')}
-Timeframe: {data.get('timeframe', 'N/A')}
-"""
-
-        send_telegram(message)
+        send_telegram(f"📩 ALERT RECEIVED:\n\n{raw_data}")
 
         return jsonify({
             "status": "success"
