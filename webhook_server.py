@@ -23,7 +23,7 @@ def home():
     })
 
 # =====================================
-# SEND TELEGRAM MESSAGE
+# TELEGRAM FUNCTION
 # =====================================
 
 def send_telegram(message):
@@ -36,12 +36,16 @@ def send_telegram(message):
 
     payload = {
         "chat_id": CHAT_ID,
-        "text": message
+        "text": str(message)
     }
 
     try:
 
-        response = requests.post(url, json=payload)
+        response = requests.post(
+            url,
+            json=payload,
+            timeout=10
+        )
 
         print("Telegram response:", response.text)
 
@@ -58,23 +62,40 @@ def webhook():
 
     try:
 
-        raw_data = request.data.decode("utf-8")
+        # Accept ANY TradingView payload
+        raw_data = request.get_data(as_text=True)
+
+        # Prevent crashes from empty payloads
+        if raw_data is None:
+            raw_data = ""
+
+        raw_data = str(raw_data)
 
         print("RAW ALERT:", raw_data)
 
-        send_telegram(f"📩 ALERT RECEIVED:\n\n{raw_data}")
+        # Limit huge messages
+        raw_data = raw_data[:3500]
 
-        return jsonify({
-            "status": "success"
-        }), 200
+        # Send to Telegram
+        try:
+
+            send_telegram(
+                f"📩 ALERT RECEIVED:\n\n{raw_data}"
+            )
+
+        except Exception as tg_error:
+
+            print("Telegram error:", str(tg_error))
+
+        # ALWAYS return success
+        return "OK", 200
 
     except Exception as e:
 
         print("Webhook error:", str(e))
 
-        return jsonify({
-            "error": str(e)
-        }), 400
+        # NEVER fail TradingView
+        return "OK", 200
 
 # =====================================
 # START SERVER
