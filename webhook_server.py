@@ -1,3 +1,4 @@
+
 from flask import Flask, request, jsonify
 import requests
 import json
@@ -6,10 +7,20 @@ from datetime import datetime
 
 app = Flask(__name__)
 
+# =========================================================
+# TELEGRAM CONFIG
+# =========================================================
+
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
+# =========================================================
+# STORAGE
+# =========================================================
+
 active_trades = {}
+
+signals = []
 
 stats = {
     "wins": 0,
@@ -25,6 +36,10 @@ combo_stats = {}
 session_stats = {}
 timeframe_stats = {}
 
+# =========================================================
+# TELEGRAM
+# =========================================================
+
 def send_telegram(message):
 
     if not BOT_TOKEN or not CHAT_ID:
@@ -39,6 +54,7 @@ def send_telegram(message):
     }
 
     try:
+
         response = requests.post(
             url,
             json=payload,
@@ -48,7 +64,12 @@ def send_telegram(message):
         print("Telegram response:", response.text)
 
     except Exception as e:
+
         print("Telegram error:", str(e))
+
+# =========================================================
+# HELPERS
+# =========================================================
 
 def now_string():
     return datetime.utcnow().strftime("%d %b %Y %H:%M")
@@ -91,6 +112,10 @@ def best_performer(stat_dict):
 
     return best_name
 
+# =========================================================
+# CLUSTER STATS
+# =========================================================
+
 def update_cluster_stats(trade, result_type):
 
     symbol = trade["symbol"]
@@ -123,6 +148,10 @@ def update_cluster_stats(trade, result_type):
         combo_stats[combo]["losses"] += 1
         session_stats[session]["losses"] += 1
         timeframe_stats[timeframe]["losses"] += 1
+
+# =========================================================
+# TRADE ENGINE
+# =========================================================
 
 def create_trade(data):
 
@@ -159,7 +188,7 @@ def create_trade(data):
 
     direction_emoji = "🟢" if trade["direction"] == "BUY" else "🔴"
 
-    msg = f"""
+    msg = f'''
 {direction_emoji} {trade["direction"]} {trade["symbol"]} | {trade["timeframe"]}
 Src: {trade["source"]} | Preset: {trade["preset"]}
 
@@ -171,7 +200,7 @@ TP2: {trade["tp2"]}
 TP3: {trade["tp3"]}
 
 Opened: {trade["opened"]}
-"""
+'''
 
     send_telegram(msg)
 
@@ -192,13 +221,13 @@ def handle_tp1(data):
 
     stats["tp1_hits"] += 1
 
-    msg = f"""
+    msg = f'''
 🎯 TP1 HIT — {trade["symbol"]} | {trade["timeframe"]}
 
 TP1: {trade["tp1"]}
 
 Hit: {now_string()}
-"""
+'''
 
     send_telegram(msg)
 
@@ -219,13 +248,13 @@ def handle_tp2(data):
 
     stats["tp2_hits"] += 1
 
-    msg = f"""
+    msg = f'''
 🎯 TP2 HIT — {trade["symbol"]} | {trade["timeframe"]}
 
 TP2: {trade["tp2"]}
 
 Hit: {now_string()}
-"""
+'''
 
     send_telegram(msg)
 
@@ -251,7 +280,7 @@ def handle_tp3(data):
 
     update_cluster_stats(trade, "win")
 
-    msg = f"""
+    msg = f'''
 🏆 FULL TP HIT — {trade["symbol"]} | {trade["timeframe"]}
 
 TP1 ✓
@@ -259,7 +288,7 @@ TP2 ✓
 TP3 ✓
 
 Closed: {now_string()}
-"""
+'''
 
     send_telegram(msg)
 
@@ -286,15 +315,19 @@ def handle_sl(data):
 
         update_cluster_stats(trade, "loss")
 
-        msg = f"""
+        msg = f'''
 🛑 STOP LOSS HIT — {trade["symbol"]} | {trade["timeframe"]}
 
 SL: {trade["sl"]}
 
 Closed: {now_string()}
-"""
+'''
 
         send_telegram(msg)
+
+# =========================================================
+# REPORTS
+# =========================================================
 
 def generate_cluster_report():
 
@@ -325,7 +358,7 @@ def generate_cluster_report():
     best_session = best_performer(session_stats)
     best_timeframe = best_performer(timeframe_stats)
 
-    report = f"""
+    report = f'''
 📊 CLUSTER REPORT
 
 Closed Trades: {closed_trades}
@@ -351,16 +384,24 @@ Open Trades: {open_trades}
 
 ⚠️ This is not financial advice.
 Trade responsibly. Past performance does not guarantee future results.
-"""
+'''
 
     return report
 
+# =========================================================
+# ROUTES
+# =========================================================
+
 @app.route("/")
 def home():
-    return jsonify({"status": "running"})
+
+    return jsonify({
+        "status": "running"
+    })
 
 @app.route("/stats")
 def get_stats():
+
     return jsonify({
         "cluster_report": generate_cluster_report()
     })
@@ -370,8 +411,11 @@ def clear():
 
     global active_trades
     global stats
+    global signals
 
     active_trades = {}
+
+    signals = []
 
     stats = {
         "wins": 0,
@@ -390,12 +434,6 @@ def clear():
 # SIGNAL QUEUE
 # =========================================================
 
-signals = []
-
-# =========================================================
-# SIGNALS ENDPOINT
-# =========================================================
-
 @app.route("/signals")
 def get_signals():
 
@@ -406,8 +444,10 @@ def get_signals():
     signals = []
 
     return jsonify(out)
-```
 
+# =========================================================
+# WEBHOOK
+# =========================================================
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
@@ -426,7 +466,9 @@ def webhook():
         if not raw_data.startswith("{"):
 
             send_telegram(
-                f"📩 ALERT RECEIVED:\n\n{raw_data}"
+                f"📩 ALERT RECEIVED:
+
+{raw_data}"
             )
 
             return "OK", 200
@@ -437,23 +479,33 @@ def webhook():
         event = data.get("event")
 
         if action == "buy" or action == "sell":
+
             signals.append(data)
+
             create_trade(data)
 
         elif event == "tp1_hit":
+
             signals.append(data)
+
             handle_tp1(data)
 
         elif event == "tp2_hit":
+
             signals.append(data)
+
             handle_tp2(data)
 
         elif event == "tp3_hit":
+
             signals.append(data)
+
             handle_tp3(data)
 
         elif event == "sl_hit":
+
             signals.append(data)
+
             handle_sl(data)
 
         return "OK", 200
@@ -463,6 +515,10 @@ def webhook():
         print("Webhook error:", str(e))
 
         return "OK", 200
+
+# =========================================================
+# START
+# =========================================================
 
 if __name__ == "__main__":
 
