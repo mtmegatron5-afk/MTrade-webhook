@@ -450,10 +450,6 @@ def weekly_report_scheduler():
         )
 
 
-" +
-                    generate_cluster_report()
-                )
-
                 print("Weekly report sent.")
 
                 last_weekly_report = current_key
@@ -482,11 +478,6 @@ def monthly_report_scheduler():
     generate_cluster_report()
 )
  
-
-" +
-                    generate_cluster_report()
-                )
-
                 print("Monthly report sent.")
 
                 last_monthly_report = current_key
