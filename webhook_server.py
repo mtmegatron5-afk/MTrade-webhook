@@ -465,9 +465,11 @@ def webhook():
         if not raw_data.startswith("{"):
 
             send_telegram(
-                "📩 ALERT RECEIVED:\n\n" + raw_data
+                f"📩 ALERT RECEIVED:
+
+{raw_data}"
             )
-            
+
             return "OK", 200
 
         data = json.loads(raw_data)
@@ -523,3 +525,154 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=5000
     )
+
+
+# =========================================================
+# AUTO REPORT SCHEDULER
+# =========================================================
+
+# =========================================================
+# AUTO REPORT SCHEDULER ADD-ON
+# ADD THIS INTO webhook_server.py
+# =========================================================
+
+import threading
+import time
+from zoneinfo import ZoneInfo
+
+LONDON_TZ = ZoneInfo("Europe/London")
+
+last_daily_report = ""
+last_weekly_report = ""
+last_monthly_report = ""
+
+# =========================================================
+# DAILY REPORT
+# 23:59 London Time
+# =========================================================
+
+def daily_report_scheduler():
+
+    global last_daily_report
+
+    while True:
+
+        now = datetime.now(LONDON_TZ)
+
+        current_key = now.strftime("%Y-%m-%d")
+
+        if (
+            now.hour == 23 and
+            now.minute == 59 and
+            last_daily_report != current_key
+        ):
+
+            send_telegram(
+                generate_cluster_report()
+            )
+
+            print("Daily report sent.")
+
+            last_daily_report = current_key
+
+        time.sleep(20)
+
+# =========================================================
+# WEEKLY REPORT
+# Friday 23:59 London Time
+# =========================================================
+
+def weekly_report_scheduler():
+
+    global last_weekly_report
+
+    while True:
+
+        now = datetime.now(LONDON_TZ)
+
+        current_key = now.strftime("%Y-%W")
+
+        if (
+            now.weekday() == 4 and
+            now.hour == 23 and
+            now.minute == 59 and
+            last_weekly_report != current_key
+        ):
+
+            report = (
+                "📈 WEEKLY REPORT\n\n" +
+                generate_cluster_report()
+            )
+
+            send_telegram(report)
+
+            print("Weekly report sent.")
+
+            last_weekly_report = current_key
+
+        time.sleep(20)
+
+# =========================================================
+# MONTHLY REPORT
+# Last day of month — 23:59 London Time
+# =========================================================
+
+def monthly_report_scheduler():
+
+    global last_monthly_report
+
+    while True:
+
+        now = datetime.now(LONDON_TZ)
+
+        current_key = now.strftime("%Y-%m")
+
+        tomorrow = now.replace(day=now.day) + timedelta(days=1)
+
+        is_last_day = tomorrow.month != now.month
+
+        if (
+            is_last_day and
+            now.hour == 23 and
+            now.minute == 59 and
+            last_monthly_report != current_key
+        ):
+
+            report = (
+                "📊 MONTHLY REPORT\n\n" +
+                generate_cluster_report()
+            )
+
+            send_telegram(report)
+
+            print("Monthly report sent.")
+
+            last_monthly_report = current_key
+
+        time.sleep(20)
+
+# =========================================================
+# ADD THIS ABOVE:
+# if __name__ == "__main__":
+# =========================================================
+
+threading.Thread(
+    target=daily_report_scheduler,
+    daemon=True
+).start()
+
+threading.Thread(
+    target=weekly_report_scheduler,
+    daemon=True
+).start()
+
+threading.Thread(
+    target=monthly_report_scheduler,
+    daemon=True
+).start()
+
+# =========================================================
+# ALSO ADD THIS IMPORT AT TOP:
+# =========================================================
+
+from datetime import timedelta
