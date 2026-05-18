@@ -2,23 +2,28 @@ from flask import Flask, request, jsonify
 import requests
 import json
 import os
-from datetime import datetime
+import threading
+import time
+
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 app = Flask(__name__)
 
 # =========================================================
-# TELEGRAM CONFIG
+# CONFIG
 # =========================================================
 
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+
+LONDON_TZ = ZoneInfo("Europe/London")
 
 # =========================================================
 # STORAGE
 # =========================================================
 
 active_trades = {}
-
 signals = []
 
 stats = {
@@ -35,6 +40,10 @@ combo_stats = {}
 session_stats = {}
 timeframe_stats = {}
 
+last_daily_report = ""
+last_weekly_report = ""
+last_monthly_report = ""
+
 # =========================================================
 # TELEGRAM
 # =========================================================
@@ -42,7 +51,7 @@ timeframe_stats = {}
 def send_telegram(message):
 
     if not BOT_TOKEN or not CHAT_ID:
-        print("Missing Telegram env variables")
+        print("Missing Telegram config")
         return
 
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
@@ -71,11 +80,11 @@ def send_telegram(message):
 # =========================================================
 
 def now_string():
-    return datetime.utcnow().strftime("%d %b %Y %H:%M")
+    return datetime.now(LONDON_TZ).strftime("%d %b %Y %H:%M")
 
 def get_session():
 
-    hour = datetime.utcnow().hour
+    hour = datetime.now(LONDON_TZ).hour
 
     if 0 <= hour < 7:
         return "Asia"
@@ -100,7 +109,7 @@ def best_performer(stat_dict):
 
         total = wins + losses
 
-        if total == 0:
+        if total <= 0:
             continue
 
         wr = wins / total
@@ -112,7 +121,7 @@ def best_performer(stat_dict):
     return best_name
 
 # =========================================================
-# CLUSTER STATS
+# CLUSTER TRACKING
 # =========================================================
 
 def update_cluster_stats(trade, result_type):
@@ -178,7 +187,6 @@ def create_trade(data):
         "tp2_hit": False,
         "tp3_hit": False,
         "sl_hit": False,
-        "is_win": False,
         "closed": False,
         "opened": now_string()
     }
@@ -216,7 +224,6 @@ def handle_tp1(data):
         return
 
     trade["tp1_hit"] = True
-    trade["is_win"] = True
 
     stats["tp1_hits"] += 1
 
@@ -243,7 +250,6 @@ def handle_tp2(data):
         return
 
     trade["tp2_hit"] = True
-    trade["is_win"] = True
 
     stats["tp2_hits"] += 1
 
@@ -270,7 +276,6 @@ def handle_tp3(data):
         return
 
     trade["tp3_hit"] = True
-    trade["is_win"] = True
     trade["closed"] = True
 
     stats["tp3_hits"] += 1
@@ -318,6 +323,20 @@ def handle_sl(data):
 🛑 STOP LOSS HIT — {trade["symbol"]} | {trade["timeframe"]}
 
 SL: {trade["sl"]}
+
+Closed: {now_string()}
+'''
+
+        send_telegram(msg)
+
+    else:
+
+        update_cluster_stats(trade, "win")
+
+        msg = f'''
+⚠️ TRADE CLOSED — {trade["symbol"]} | {trade["timeframe"]}
+
+Partial profits were secured before reversal.
 
 Closed: {now_string()}
 '''
@@ -388,6 +407,87 @@ Trade responsibly. Past performance does not guarantee future results.
     return report
 
 # =========================================================
+# AUTO REPORTS
+# =========================================================
+
+def daily_report_scheduler():
+
+    global last_daily_report
+
+    while True:
+
+        now = datetime.now(LONDON_TZ)
+        current_key = now.strftime("%Y-%m-%d")
+
+        if now.hour == 23 and now.minute == 59:
+
+            if last_daily_report != current_key:
+
+                send_telegram(generate_cluster_report())
+
+                print("Daily report sent.")
+
+                last_daily_report = current_key
+
+        time.sleep(20)
+
+def weekly_report_scheduler():
+
+    global last_weekly_report
+
+    while True:
+
+        now = datetime.now(LONDON_TZ)
+        current_key = now.strftime("%Y-%W")
+
+        if now.weekday() == 4 and now.hour == 23 and now.minute == 59:
+
+            if last_weekly_report != current_key:
+
+                send_telegram(
+                    "📈 WEEKLY REPORT
+
+" +
+                    generate_cluster_report()
+                )
+
+                print("Weekly report sent.")
+
+                last_weekly_report = current_key
+
+        time.sleep(20)
+
+def monthly_report_scheduler():
+
+    global last_monthly_report
+
+    while True:
+
+        now = datetime.now(LONDON_TZ)
+        current_key = now.strftime("%Y-%m")
+
+        tomorrow = now + timedelta(days=1)
+
+        is_last_day = tomorrow.month != now.month
+
+        if is_last_day and now.hour == 23 and now.minute == 59:
+
+            if last_monthly_report != current_key:
+
+                send_telegram(
+                    "📊 MONTHLY REPORT
+
+" +
+                    generate_cluster_report()
+                )
+
+                print("Monthly report sent.")
+
+                last_monthly_report = current_key
+
+        time.sleep(20)
+
+# =========================================================
 # ROUTES
 # =========================================================
 
@@ -409,11 +509,10 @@ def get_stats():
 def clear():
 
     global active_trades
-    global stats
     global signals
+    global stats
 
     active_trades = {}
-
     signals = []
 
     stats = {
@@ -428,10 +527,6 @@ def clear():
     return jsonify({
         "status": "cleared"
     })
-
-# =========================================================
-# SIGNAL QUEUE
-# =========================================================
 
 @app.route("/signals")
 def get_signals():
@@ -461,15 +556,15 @@ def webhook():
         raw_data = str(raw_data).strip()
 
         print("RAW ALERT:", raw_data)
-        
-if not raw_data.startswith("{"):
 
-    send_telegram(
-        "📩 ALERT RECEIVED:\n\n" + raw_data
-    )
+        if not raw_data.startswith("{"):
 
-    return "OK", 200
-    
+            send_telegram(
+                "📩 ALERT RECEIVED:\n\n" + raw_data
+            )
+
+            return "OK", 200
+
         data = json.loads(raw_data)
 
         action = data.get("action")
@@ -514,144 +609,7 @@ if not raw_data.startswith("{"):
         return "OK", 200
 
 # =========================================================
-# START
-# =========================================================
-
-if __name__ == "__main__":
-
-    app.run(
-        host="0.0.0.0",
-        port=5000
-    )
-
-
-# =========================================================
-# AUTO REPORT SCHEDULER
-# =========================================================
-
-# =========================================================
-# AUTO REPORT SCHEDULER ADD-ON
-# ADD THIS INTO webhook_server.py
-# =========================================================
-
-import threading
-import time
-from zoneinfo import ZoneInfo
-
-LONDON_TZ = ZoneInfo("Europe/London")
-
-last_daily_report = ""
-last_weekly_report = ""
-last_monthly_report = ""
-
-# =========================================================
-# DAILY REPORT
-# 23:59 London Time
-# =========================================================
-
-def daily_report_scheduler():
-
-    global last_daily_report
-
-    while True:
-
-        now = datetime.now(LONDON_TZ)
-
-        current_key = now.strftime("%Y-%m-%d")
-
-        if (
-            now.hour == 23 and
-            now.minute == 59 and
-            last_daily_report != current_key
-        ):
-
-            send_telegram(
-                generate_cluster_report()
-            )
-
-            print("Daily report sent.")
-
-            last_daily_report = current_key
-
-        time.sleep(20)
-
-# =========================================================
-# WEEKLY REPORT
-# Friday 23:59 London Time
-# =========================================================
-
-def weekly_report_scheduler():
-
-    global last_weekly_report
-
-    while True:
-
-        now = datetime.now(LONDON_TZ)
-
-        current_key = now.strftime("%Y-%W")
-
-        if (
-            now.weekday() == 4 and
-            now.hour == 23 and
-            now.minute == 59 and
-            last_weekly_report != current_key
-        ):
-
-            report = (
-                "📈 WEEKLY REPORT\n\n" +
-                generate_cluster_report()
-            )
-
-            send_telegram(report)
-
-            print("Weekly report sent.")
-
-            last_weekly_report = current_key
-
-        time.sleep(20)
-
-# =========================================================
-# MONTHLY REPORT
-# Last day of month — 23:59 London Time
-# =========================================================
-
-def monthly_report_scheduler():
-
-    global last_monthly_report
-
-    while True:
-
-        now = datetime.now(LONDON_TZ)
-
-        current_key = now.strftime("%Y-%m")
-
-        tomorrow = now.replace(day=now.day) + timedelta(days=1)
-
-        is_last_day = tomorrow.month != now.month
-
-        if (
-            is_last_day and
-            now.hour == 23 and
-            now.minute == 59 and
-            last_monthly_report != current_key
-        ):
-
-            report = (
-                "📊 MONTHLY REPORT\n\n" +
-                generate_cluster_report()
-            )
-
-            send_telegram(report)
-
-            print("Monthly report sent.")
-
-            last_monthly_report = current_key
-
-        time.sleep(20)
-
-# =========================================================
-# ADD THIS ABOVE:
-# if __name__ == "__main__":
+# START THREADS
 # =========================================================
 
 threading.Thread(
@@ -670,7 +628,12 @@ threading.Thread(
 ).start()
 
 # =========================================================
-# ALSO ADD THIS IMPORT AT TOP:
+# START SERVER
 # =========================================================
 
-from datetime import timedelta
+if __name__ == "__main__":
+
+    app.run(
+        host="0.0.0.0",
+        port=5000
+    )
