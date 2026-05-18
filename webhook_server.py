@@ -465,11 +465,9 @@ def webhook():
         if not raw_data.startswith("{"):
 
             send_telegram(
-                f"📩 ALERT RECEIVED:
-
-{raw_data}"
+                "📩 ALERT RECEIVED:\n\n" + raw_data
             )
-
+            
             return "OK", 200
 
         data = json.loads(raw_data)
