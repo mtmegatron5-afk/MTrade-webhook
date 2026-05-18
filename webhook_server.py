@@ -386,6 +386,29 @@ def clear():
         "status": "cleared"
     })
 
+# =========================================================
+# SIGNAL QUEUE
+# =========================================================
+
+signals = []
+
+# =========================================================
+# SIGNALS ENDPOINT
+# =========================================================
+
+@app.route("/signals")
+def get_signals():
+
+    global signals
+
+    out = signals.copy()
+
+    signals = []
+
+    return jsonify(out)
+```
+
+
 @app.route("/webhook", methods=["POST"])
 def webhook():
 
@@ -414,18 +437,23 @@ def webhook():
         event = data.get("event")
 
         if action == "buy" or action == "sell":
+            signals.append(data)
             create_trade(data)
 
         elif event == "tp1_hit":
+            signals.append(data)
             handle_tp1(data)
 
         elif event == "tp2_hit":
+            signals.append(data)
             handle_tp2(data)
 
         elif event == "tp3_hit":
+            signals.append(data)
             handle_tp3(data)
 
         elif event == "sl_hit":
+            signals.append(data)
             handle_sl(data)
 
         return "OK", 200
