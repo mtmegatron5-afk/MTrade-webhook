@@ -2,6 +2,7 @@ from flask import Flask, request, jsonify
 import requests
 import json
 import os
+import csv
 import threading
 import time
 
@@ -236,7 +237,7 @@ Hit: {now_string()}
 '''
 
     send_telegram(msg)
-
+    
 def handle_tp2(data):
 
     trade_id = data.get("trade_id")
@@ -262,7 +263,7 @@ Hit: {now_string()}
 '''
 
     send_telegram(msg)
-
+    
 def handle_tp3(data):
 
     trade_id = data.get("trade_id")
@@ -284,6 +285,19 @@ def handle_tp3(data):
 
     update_cluster_stats(trade, "win")
 
+    with open("trades.csv", "a", newline="") as f:
+
+        writer = csv.writer(f)
+
+        writer.writerow([
+            trade["symbol"],
+            trade["source"],
+            trade["preset"],
+            trade["timeframe"],
+            get_session(),
+            "TP3"
+        ])
+
     msg = f'''
 🏆 FULL TP HIT — {trade["symbol"]} | {trade["timeframe"]}
 
@@ -300,26 +314,27 @@ def handle_sl(data):
 
     trade_id = data.get("trade_id")
 
-    if trade_id not in active_trades:
-        return
+if not trade["tp1_hit"] and not trade["tp2_hit"] and not trade["tp3_hit"]:
 
-    trade = active_trades[trade_id]
+    stats["losses"] += 1
 
-    if trade["sl_hit"]:
-        return
+    update_cluster_stats(trade, "loss")
 
-    trade["sl_hit"] = True
-    trade["closed"] = True
+    with open("trades.csv", "a", newline="") as f:
 
-    stats["closed_trades"] += 1
+        writer = csv.writer(f)
 
-    if not trade["tp1_hit"] and not trade["tp2_hit"] and not trade["tp3_hit"]:
+        writer.writerow([
+            trade["symbol"],
+            trade["source"],
+            trade["preset"],
+            trade["timeframe"],
+            get_session(),
+            "SL"
+        ])
 
-        stats["losses"] += 1
+    msg = f'''
 
-        update_cluster_stats(trade, "loss")
-
-        msg = f'''
 🛑 STOP LOSS HIT — {trade["symbol"]} | {trade["timeframe"]}
 
 SL: {trade["sl"]}
@@ -329,11 +344,29 @@ Closed: {now_string()}
 
         send_telegram(msg)
 
-    else:
+else:
 
-        update_cluster_stats(trade, "win")
+    update_cluster_stats(trade, "win")
 
-        msg = f'''
+    result_type = "TP1_SL"
+
+    if trade["tp2_hit"]:
+        result_type = "TP2_SL"
+
+    with open("trades.csv", "a", newline="") as f:
+
+        writer = csv.writer(f)
+
+        writer.writerow([
+            trade["symbol"],
+            trade["source"],
+            trade["preset"],
+            trade["timeframe"],
+            get_session(),
+            result_type
+        ])
+
+    msg = f'''
 ⚠️ TRADE CLOSED — {trade["symbol"]} | {trade["timeframe"]}
 
 Partial profits were secured before reversal.
@@ -341,7 +374,7 @@ Partial profits were secured before reversal.
 Closed: {now_string()}
 '''
 
-        send_telegram(msg)
+    send_telegram(msg)
 
 # =========================================================
 # REPORTS
