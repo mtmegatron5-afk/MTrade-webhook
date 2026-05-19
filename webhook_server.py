@@ -357,29 +357,29 @@ Closed: {now_string()}
 
         send_telegram(msg)
 
-else:
+    else:
 
-    update_cluster_stats(trade, "win")
+        update_cluster_stats(trade, "win")
 
-    result_type = "TP1_SL"
+        result_type = "TP1_SL"
 
-    if trade["tp2_hit"]:
-        result_type = "TP2_SL"
+        if trade["tp2_hit"]:
+            result_type = "TP2_SL"
 
-    with open("trades.csv", "a", newline="") as f:
+        with open("trades.csv", "a", newline="") as f:
 
-        writer = csv.writer(f)
+            writer = csv.writer(f)
 
-        writer.writerow([
-            trade["symbol"],
-            trade["source"],
-            trade["preset"],
-            trade["timeframe"],
-            get_session(),
-            result_type
-        ])
+            writer.writerow([
+                trade["symbol"],
+                trade["source"],
+                trade["preset"],
+                trade["timeframe"],
+                get_session(),
+                result_type
+            ])
 
-    msg = f'''
+        msg = f'''
 ⚠️ TRADE CLOSED — {trade["symbol"]} | {trade["timeframe"]}
 
 Partial profits were secured before reversal.
@@ -387,7 +387,7 @@ Partial profits were secured before reversal.
 Closed: {now_string()}
 '''
 
-    send_telegram(msg)
+        send_telegram(msg)
 
 # =========================================================
 # REPORTS
