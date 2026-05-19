@@ -49,18 +49,24 @@ last_monthly_report = ""
 # TELEGRAM
 # =========================================================
 
-def send_telegram(message):
+def send_telegram(message, reply_to_message_id=None):
 
     if not BOT_TOKEN or not CHAT_ID:
         print("Missing Telegram config")
-        return
+        return None
 
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
 
     payload = {
         "chat_id": CHAT_ID,
-        "text": str(message)
+        "text": str(message).strip()
     }
+
+    if reply_to_message_id:
+        payload["reply_parameters"] = {
+            "message_id": reply_to_message_id,
+            "allow_sending_without_reply": True
+        }
 
     try:
 
@@ -72,9 +78,15 @@ def send_telegram(message):
 
         print("Telegram response:", response.text)
 
+        result = response.json()
+        if result.get("ok"):
+            return result.get("result", {}).get("message_id")
+
     except Exception as e:
 
         print("Telegram error:", str(e))
+
+    return None
 
 # =========================================================
 # HELPERS
@@ -189,7 +201,8 @@ def create_trade(data):
         "tp3_hit": False,
         "sl_hit": False,
         "closed": False,
-        "opened": now_string()
+        "opened": now_string(),
+        "telegram_message_id": None
     }
 
     active_trades[trade_id] = trade
@@ -210,7 +223,7 @@ TP3: {trade["tp3"]}
 Opened: {trade["opened"]}
 '''
 
-    send_telegram(msg)
+    trade["telegram_message_id"] = send_telegram(msg)
 
 def handle_tp1(data):
 
@@ -228,15 +241,9 @@ def handle_tp1(data):
 
     stats["tp1_hits"] += 1
 
-    msg = f'''
-🎯 TP1 HIT — {trade["symbol"]} | {trade["timeframe"]}
+    msg = f'🎯 TP1 {trade["symbol"]} | {trade["timeframe"]}\nPrice: {trade["tp1"]}'
 
-TP1: {trade["tp1"]}
-
-Hit: {now_string()}
-'''
-
-    send_telegram(msg)
+    send_telegram(msg, reply_to_message_id=trade.get("telegram_message_id"))
     
 def handle_tp2(data):
 
@@ -254,15 +261,9 @@ def handle_tp2(data):
 
     stats["tp2_hits"] += 1
 
-    msg = f'''
-🎯 TP2 HIT — {trade["symbol"]} | {trade["timeframe"]}
+    msg = f'🎯 TP2 {trade["symbol"]} | {trade["timeframe"]}\nPrice: {trade["tp2"]}'
 
-TP2: {trade["tp2"]}
-
-Hit: {now_string()}
-'''
-
-    send_telegram(msg)
+    send_telegram(msg, reply_to_message_id=trade.get("telegram_message_id"))
     
 def handle_tp3(data):
 
@@ -298,17 +299,9 @@ def handle_tp3(data):
             "TP3"
         ])
 
-    msg = f'''
-🏆 FULL TP HIT — {trade["symbol"]} | {trade["timeframe"]}
+    msg = f'🏆 TP3 {trade["symbol"]} | {trade["timeframe"]}\nPrice: {trade["tp3"]}\nClosed'
 
-TP1 ✓
-TP2 ✓
-TP3 ✓
-
-Closed: {now_string()}
-'''
-
-    send_telegram(msg)
+    send_telegram(msg, reply_to_message_id=trade.get("telegram_message_id"))
 
 def handle_sl(data):
 
@@ -347,15 +340,9 @@ def handle_sl(data):
                 "SL"
             ])
 
-        msg = f'''
-🛑 STOP LOSS HIT — {trade["symbol"]} | {trade["timeframe"]}
+        msg = f'🛑 SL {trade["symbol"]} | {trade["timeframe"]}\nPrice: {trade["sl"]}\nClosed'
 
-SL: {trade["sl"]}
-
-Closed: {now_string()}
-'''
-
-        send_telegram(msg)
+        send_telegram(msg, reply_to_message_id=trade.get("telegram_message_id"))
 
     else:
 
@@ -379,15 +366,9 @@ Closed: {now_string()}
                 result_type
             ])
 
-        msg = f'''
-⚠️ TRADE CLOSED — {trade["symbol"]} | {trade["timeframe"]}
+        msg = f'⚠️ CLOSED {trade["symbol"]} | {trade["timeframe"]}\nResult: {result_type}'
 
-Partial profits were secured before reversal.
-
-Closed: {now_string()}
-'''
-
-        send_telegram(msg)
+        send_telegram(msg, reply_to_message_id=trade.get("telegram_message_id"))
 
 # =========================================================
 # REPORTS
