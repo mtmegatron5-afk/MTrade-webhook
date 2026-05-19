@@ -314,26 +314,40 @@ def handle_sl(data):
 
     trade_id = data.get("trade_id")
 
-if not trade["tp1_hit"] and not trade["tp2_hit"] and not trade["tp3_hit"]:
+    if trade_id not in active_trades:
+        return
 
-    stats["losses"] += 1
+    trade = active_trades[trade_id]
 
-    update_cluster_stats(trade, "loss")
+    if trade["sl_hit"]:
+        return
 
-    with open("trades.csv", "a", newline="") as f:
+    trade["sl_hit"] = True
+    trade["closed"] = True
 
-        writer = csv.writer(f)
+    stats["closed_trades"] += 1
 
-        writer.writerow([
-            trade["symbol"],
-            trade["source"],
-            trade["preset"],
-            trade["timeframe"],
-            get_session(),
-            "SL"
-        ])
+    # DIRECT LOSS
+    if not trade["tp1_hit"] and not trade["tp2_hit"] and not trade["tp3_hit"]:
 
-    msg = f'''
+        stats["losses"] += 1
+
+        update_cluster_stats(trade, "loss")
+
+        with open("trades.csv", "a", newline="") as f:
+
+            writer = csv.writer(f)
+
+            writer.writerow([
+                trade["symbol"],
+                trade["source"],
+                trade["preset"],
+                trade["timeframe"],
+                get_session(),
+                "SL"
+            ])
+
+        msg = f'''
 🛑 STOP LOSS HIT — {trade["symbol"]} | {trade["timeframe"]}
 
 SL: {trade["sl"]}
@@ -341,7 +355,7 @@ SL: {trade["sl"]}
 Closed: {now_string()}
 '''
 
-    send_telegram(msg)
+        send_telegram(msg)
 
 else:
 
