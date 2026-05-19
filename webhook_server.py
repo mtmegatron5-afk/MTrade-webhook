@@ -314,7 +314,7 @@ def handle_sl(data):
 
     trade_id = data.get("trade_id")
 
-if not trade["tp1_hit"] and not trade["tp2_hit"] and not trade["tp3_hit"]:
+    if not trade["tp1_hit"] and not trade["tp2_hit"] and not trade["tp3_hit"]:
 
     stats["losses"] += 1
 
