@@ -342,7 +342,7 @@ SL: {trade["sl"]}
 Closed: {now_string()}
 '''
 
-        send_telegram(msg)
+    send_telegram(msg)
 
 else:
 
