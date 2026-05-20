@@ -21,6 +21,7 @@ CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 STATE_FILE = os.getenv("TRADE_STATE_FILE", "trade_state.json")
 TELEGRAM_MAX_RETRIES = int(os.getenv("TELEGRAM_MAX_RETRIES", "5"))
 TELEGRAM_MIN_INTERVAL_SECONDS = float(os.getenv("TELEGRAM_MIN_INTERVAL_SECONDS", "0.5"))
+DEBUG_KEY = os.getenv("DEBUG_KEY", "")
 
 LONDON_TZ = ZoneInfo("Europe/London")
 
@@ -53,6 +54,18 @@ last_daily_report = ""
 last_weekly_report = ""
 last_monthly_report = ""
 
+last_webhook_at = None
+last_webhook_event = None
+last_webhook_ticker = None
+telegram_status = {
+    "queued": 0,
+    "sent": 0,
+    "failed": 0,
+    "last_ok_at": None,
+    "last_error": None,
+    "last_response": None
+}
+
 # =========================================================
 # TELEGRAM
 # =========================================================
@@ -61,6 +74,8 @@ def send_telegram(message, reply_to_message_id=None, reply_to_trade_id=None, sto
 
     if not BOT_TOKEN or not CHAT_ID:
         print("Missing Telegram config")
+        telegram_status["failed"] += 1
+        telegram_status["last_error"] = "Missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID"
         return None
 
     item = {
@@ -72,6 +87,7 @@ def send_telegram(message, reply_to_message_id=None, reply_to_trade_id=None, sto
 
     try:
         telegram_outbox.put(item, timeout=2)
+        telegram_status["queued"] += 1
         print("Telegram queued. Queue size:", telegram_outbox.qsize())
 
     except queue.Full:
@@ -124,10 +140,14 @@ def send_telegram_now(item):
 
                 last_telegram_send_at = time.time()
                 print("Telegram response:", response.text)
+                telegram_status["last_response"] = response.text
 
                 result = response.json()
 
                 if result.get("ok"):
+                    telegram_status["sent"] += 1
+                    telegram_status["last_ok_at"] = now_string()
+                    telegram_status["last_error"] = None
                     return result.get("result", {}).get("message_id")
 
                 retry_after = result.get("parameters", {}).get("retry_after")
@@ -141,9 +161,11 @@ def send_telegram_now(item):
             except Exception as e:
 
                 print("Telegram error:", str(e))
+                telegram_status["last_error"] = str(e)
 
             time.sleep(1 + attempt)
 
+    telegram_status["failed"] += 1
     return None
 
 def telegram_sender_worker():
@@ -162,6 +184,8 @@ def telegram_sender_worker():
 
         except Exception as e:
             print("Telegram worker error:", str(e))
+            telegram_status["failed"] += 1
+            telegram_status["last_error"] = str(e)
 
         finally:
             telegram_outbox.task_done()
@@ -750,7 +774,29 @@ def monthly_report_scheduler():
 def home():
 
     return jsonify({
-        "status": "running"
+        "status": "running",
+        "telegram_bot_token_set": bool(BOT_TOKEN),
+        "telegram_chat_id_set": bool(CHAT_ID),
+        "telegram_queue_size": telegram_outbox.qsize(),
+        "telegram": telegram_status,
+        "last_webhook_at": last_webhook_at,
+        "last_webhook_event": last_webhook_event,
+        "last_webhook_ticker": last_webhook_ticker,
+        "active_trades": len(active_trades)
+    })
+
+@app.route("/telegram-test", methods=["GET", "POST"])
+def telegram_test():
+
+    if DEBUG_KEY and request.args.get("key") != DEBUG_KEY:
+        return jsonify({"status": "forbidden"}), 403
+
+    send_telegram("✅ Telegram test from Render webhook")
+
+    return jsonify({
+        "status": "queued",
+        "telegram_queue_size": telegram_outbox.qsize(),
+        "telegram": telegram_status
     })
 
 @app.route("/stats")
@@ -805,6 +851,10 @@ def get_signals():
 @app.route("/webhook", methods=["POST"])
 def webhook():
 
+    global last_webhook_at
+    global last_webhook_event
+    global last_webhook_ticker
+
     try:
 
         raw_data = request.get_data(as_text=True)
@@ -836,6 +886,9 @@ def webhook():
 
         action = data.get("action")
         event = data.get("event")
+        last_webhook_at = now_string()
+        last_webhook_event = action or event or "unknown"
+        last_webhook_ticker = data.get("ticker")
 
         # =====================================
         # BUY / SELL
