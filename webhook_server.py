@@ -5,6 +5,7 @@ import os
 import csv
 import threading
 import time
+import queue
 
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -17,6 +18,9 @@ app = Flask(__name__)
 
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+STATE_FILE = os.getenv("TRADE_STATE_FILE", "trade_state.json")
+TELEGRAM_MAX_RETRIES = int(os.getenv("TELEGRAM_MAX_RETRIES", "5"))
+TELEGRAM_MIN_INTERVAL_SECONDS = float(os.getenv("TELEGRAM_MIN_INTERVAL_SECONDS", "0.5"))
 
 LONDON_TZ = ZoneInfo("Europe/London")
 
@@ -26,6 +30,10 @@ LONDON_TZ = ZoneInfo("Europe/London")
 
 active_trades = {}
 signals = []
+seen_unmatched_updates = set()
+telegram_send_lock = threading.Lock()
+last_telegram_send_at = 0.0
+telegram_outbox = queue.Queue(maxsize=int(os.getenv("TELEGRAM_QUEUE_MAXSIZE", "1000")))
 
 stats = {
     "wins": 0,
@@ -49,17 +57,46 @@ last_monthly_report = ""
 # TELEGRAM
 # =========================================================
 
-def send_telegram(message, reply_to_message_id=None):
+def send_telegram(message, reply_to_message_id=None, reply_to_trade_id=None, store_message_id_for_trade_id=None):
 
     if not BOT_TOKEN or not CHAT_ID:
         print("Missing Telegram config")
         return None
 
+    item = {
+        "message": str(message).strip(),
+        "reply_to_message_id": reply_to_message_id,
+        "reply_to_trade_id": reply_to_trade_id,
+        "store_message_id_for_trade_id": store_message_id_for_trade_id
+    }
+
+    try:
+        telegram_outbox.put(item, timeout=2)
+        print("Telegram queued. Queue size:", telegram_outbox.qsize())
+
+    except queue.Full:
+        print("Telegram queue full. Sending directly as fallback.")
+        return send_telegram_now(item)
+
+    return None
+
+def send_telegram_now(item):
+
+    global last_telegram_send_at
+
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    reply_to_message_id = item.get("reply_to_message_id")
+    reply_to_trade_id = item.get("reply_to_trade_id")
+
+    if reply_to_trade_id and not reply_to_message_id:
+        trade = active_trades.get(reply_to_trade_id)
+
+        if trade:
+            reply_to_message_id = trade.get("telegram_message_id")
 
     payload = {
         "chat_id": CHAT_ID,
-        "text": str(message).strip()
+        "text": item.get("message", "")
     }
 
     if reply_to_message_id:
@@ -68,25 +105,66 @@ def send_telegram(message, reply_to_message_id=None):
             "allow_sending_without_reply": True
         }
 
-    try:
+    with telegram_send_lock:
 
-        response = requests.post(
-            url,
-            json=payload,
-            timeout=10
-        )
+        for attempt in range(TELEGRAM_MAX_RETRIES):
 
-        print("Telegram response:", response.text)
+            wait_time = TELEGRAM_MIN_INTERVAL_SECONDS - (time.time() - last_telegram_send_at)
 
-        result = response.json()
-        if result.get("ok"):
-            return result.get("result", {}).get("message_id")
+            if wait_time > 0:
+                time.sleep(wait_time)
 
-    except Exception as e:
+            try:
 
-        print("Telegram error:", str(e))
+                response = requests.post(
+                    url,
+                    json=payload,
+                    timeout=10
+                )
+
+                last_telegram_send_at = time.time()
+                print("Telegram response:", response.text)
+
+                result = response.json()
+
+                if result.get("ok"):
+                    return result.get("result", {}).get("message_id")
+
+                retry_after = result.get("parameters", {}).get("retry_after")
+
+                if retry_after is not None:
+                    sleep_for = float(retry_after) + 0.5
+                    print("Telegram rate limited. Sleeping:", sleep_for)
+                    time.sleep(sleep_for)
+                    continue
+
+            except Exception as e:
+
+                print("Telegram error:", str(e))
+
+            time.sleep(1 + attempt)
 
     return None
+
+def telegram_sender_worker():
+
+    while True:
+
+        item = telegram_outbox.get()
+
+        try:
+            message_id = send_telegram_now(item)
+            trade_id = item.get("store_message_id_for_trade_id")
+
+            if trade_id and message_id and trade_id in active_trades:
+                active_trades[trade_id]["telegram_message_id"] = message_id
+                save_trade_state()
+
+        except Exception as e:
+            print("Telegram worker error:", str(e))
+
+        finally:
+            telegram_outbox.task_done()
 
 # =========================================================
 # HELPERS
@@ -136,6 +214,86 @@ def format_timeframe(timeframe):
 
     return mapping.get(upper, text)
 
+def save_trade_state():
+
+    try:
+        with open(STATE_FILE, "w", encoding="utf-8") as f:
+            json.dump({"active_trades": active_trades}, f)
+
+    except Exception as e:
+        print("State save error:", str(e))
+
+def load_trade_state():
+
+    global active_trades
+
+    try:
+        if not os.path.exists(STATE_FILE):
+            return
+
+        with open(STATE_FILE, "r", encoding="utf-8") as f:
+            saved = json.load(f)
+
+        active_trades = saved.get("active_trades", {})
+        print("Loaded trade state:", len(active_trades), "trades")
+
+    except Exception as e:
+        print("State load error:", str(e))
+
+def unmatched_update_key(data, label):
+
+    return "|".join([
+        str(label or ""),
+        str(data.get("trade_id") or ""),
+        str(data.get("ticker") or ""),
+        str(data.get("timeframe") or ""),
+        str(data.get("price") or "")
+    ])
+
+def update_price(data, trade, price_field):
+
+    if data.get("price") is not None:
+        return data.get("price")
+
+    if data.get(price_field) is not None:
+        return data.get(price_field)
+
+    if trade and trade.get(price_field) is not None:
+        return trade.get(price_field)
+
+    return "N/A"
+
+def send_unmatched_update(data, label, emoji, price_field, closed=False):
+
+    key = unmatched_update_key(data, label)
+
+    if key in seen_unmatched_updates:
+        print("Duplicate unmatched update ignored:", key)
+        return
+
+    seen_unmatched_updates.add(key)
+
+    if len(seen_unmatched_updates) > 2000:
+        seen_unmatched_updates.clear()
+
+    symbol = clean_symbol(data.get("ticker", "UNKNOWN"))
+    timeframe = format_timeframe(data.get("timeframe", "N/A"))
+    price = update_price(data, None, price_field)
+
+    msg = f'{emoji} {label} {symbol} | {timeframe}\nPrice: {price}'
+
+    if closed:
+        msg += "\nClosed"
+
+    print(
+        "Unmatched update sent without reply tag:",
+        label,
+        "trade_id=",
+        data.get("trade_id")
+    )
+
+    send_telegram(msg)
+
 def get_session():
 
     hour = datetime.now(LONDON_TZ).hour
@@ -173,6 +331,8 @@ def best_performer(stat_dict):
             best_name = key
 
     return best_name
+
+load_trade_state()
 
 # =========================================================
 # CLUSTER TRACKING
@@ -269,16 +429,22 @@ TP3: {trade["tp3"]}
 Opened: {trade["opened"]}
 '''
 
-    trade["telegram_message_id"] = send_telegram(msg)
+    send_telegram(msg, store_message_id_for_trade_id=trade_id)
+    save_trade_state()
 
 def handle_tp1(data):
 
     trade_id = data.get("trade_id")
 
     if trade_id not in active_trades:
+        send_unmatched_update(data, "TP1", "🎯", "tp1")
         return
 
     trade = active_trades[trade_id]
+
+    if trade.get("closed"):
+        print("TP1 ignored because trade is already closed:", trade_id)
+        return
 
     if trade["tp1_hit"]:
         return
@@ -289,16 +455,22 @@ def handle_tp1(data):
 
     msg = f'🎯 TP1 {trade["symbol"]} | {trade["timeframe"]}\nPrice: {trade["tp1"]}'
 
-    send_telegram(msg, reply_to_message_id=trade.get("telegram_message_id"))
+    send_telegram(msg, reply_to_trade_id=trade_id)
+    save_trade_state()
     
 def handle_tp2(data):
 
     trade_id = data.get("trade_id")
 
     if trade_id not in active_trades:
+        send_unmatched_update(data, "TP2", "🎯", "tp2")
         return
 
     trade = active_trades[trade_id]
+
+    if trade.get("closed"):
+        print("TP2 ignored because trade is already closed:", trade_id)
+        return
 
     if trade["tp2_hit"]:
         return
@@ -309,16 +481,22 @@ def handle_tp2(data):
 
     msg = f'🎯 TP2 {trade["symbol"]} | {trade["timeframe"]}\nPrice: {trade["tp2"]}'
 
-    send_telegram(msg, reply_to_message_id=trade.get("telegram_message_id"))
+    send_telegram(msg, reply_to_trade_id=trade_id)
+    save_trade_state()
     
 def handle_tp3(data):
 
     trade_id = data.get("trade_id")
 
     if trade_id not in active_trades:
+        send_unmatched_update(data, "TP3", "🏆", "tp3", closed=True)
         return
 
     trade = active_trades[trade_id]
+
+    if trade.get("closed"):
+        print("TP3 ignored because trade is already closed:", trade_id)
+        return
 
     if trade["tp3_hit"]:
         return
@@ -347,16 +525,22 @@ def handle_tp3(data):
 
     msg = f'🏆 TP3 {trade["symbol"]} | {trade["timeframe"]}\nPrice: {trade["tp3"]}\nClosed'
 
-    send_telegram(msg, reply_to_message_id=trade.get("telegram_message_id"))
+    send_telegram(msg, reply_to_trade_id=trade_id)
+    save_trade_state()
 
 def handle_sl(data):
 
     trade_id = data.get("trade_id")
 
     if trade_id not in active_trades:
+        send_unmatched_update(data, "SL", "🛑", "sl", closed=True)
         return
 
     trade = active_trades[trade_id]
+
+    if trade.get("closed"):
+        print("SL ignored because trade is already closed:", trade_id)
+        return
 
     if trade["sl_hit"]:
         return
@@ -388,7 +572,8 @@ def handle_sl(data):
 
         msg = f'🛑 SL {trade["symbol"]} | {trade["timeframe"]}\nPrice: {trade["sl"]}\nClosed'
 
-        send_telegram(msg, reply_to_message_id=trade.get("telegram_message_id"))
+        send_telegram(msg, reply_to_trade_id=trade_id)
+        save_trade_state()
 
     else:
 
@@ -414,7 +599,8 @@ def handle_sl(data):
 
         msg = f'⚠️ CLOSED {trade["symbol"]} | {trade["timeframe"]}\nResult: {result_type}'
 
-        send_telegram(msg, reply_to_message_id=trade.get("telegram_message_id"))
+        send_telegram(msg, reply_to_trade_id=trade_id)
+        save_trade_state()
 
 # =========================================================
 # REPORTS
@@ -580,9 +766,11 @@ def clear():
     global active_trades
     global signals
     global stats
+    global seen_unmatched_updates
 
     active_trades = {}
     signals = []
+    seen_unmatched_updates = set()
 
     stats = {
         "wins": 0,
@@ -592,6 +780,8 @@ def clear():
         "tp3_hits": 0,
         "closed_trades": 0
     }
+
+    save_trade_state()
 
     return jsonify({
         "status": "cleared"
@@ -708,6 +898,11 @@ def webhook():
 # =========================================================
 # START THREADS
 # =========================================================
+
+threading.Thread(
+    target=telegram_sender_worker,
+    daemon=True
+).start()
 
 threading.Thread(
     target=daily_report_scheduler,
