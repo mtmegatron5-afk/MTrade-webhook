@@ -85,16 +85,16 @@ def send_telegram(message, reply_to_message_id=None, reply_to_trade_id=None, sto
         "store_message_id_for_trade_id": store_message_id_for_trade_id
     }
 
-    try:
-        telegram_outbox.put(item, timeout=2)
-        telegram_status["queued"] += 1
-        print("Telegram queued. Queue size:", telegram_outbox.qsize())
+    # Render can run web apps in a way that leaves import-time background
+    # workers asleep. Send directly with retry so alerts cannot sit in a
+    # queue forever.
+    message_id = send_telegram_now(item)
 
-    except queue.Full:
-        print("Telegram queue full. Sending directly as fallback.")
-        return send_telegram_now(item)
+    if store_message_id_for_trade_id and message_id and store_message_id_for_trade_id in active_trades:
+        active_trades[store_message_id_for_trade_id]["telegram_message_id"] = message_id
+        save_trade_state()
 
-    return None
+    return message_id
 
 def send_telegram_now(item):
 
@@ -791,10 +791,11 @@ def telegram_test():
     if DEBUG_KEY and request.args.get("key") != DEBUG_KEY:
         return jsonify({"status": "forbidden"}), 403
 
-    send_telegram("✅ Telegram test from Render webhook")
+    message_id = send_telegram("✅ Telegram test from Render webhook")
 
     return jsonify({
-        "status": "queued",
+        "status": "sent" if message_id else "failed",
+        "message_id": message_id,
         "telegram_queue_size": telegram_outbox.qsize(),
         "telegram": telegram_status
     })
